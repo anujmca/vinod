@@ -2,8 +2,8 @@ import json
 import os.path
 from datetime import datetime
 
-input_file_path = 'data/json5.json'
-output_file_path = 'data/json5_output.json'
+input_file_path = 'data/json1.json'
+output_file_path = 'data/json1_output.json'
 pkg_id_element_name = "pkg_id"
 temp_file_path = 'data/__temp__.json'
 
@@ -104,46 +104,91 @@ def add_key_value_recurssively(element, key, value):
     """
     # Check if the given element is a json/dictionary object
     if isinstance(element, dict):
-        add_key_to_element(element, key, value) # Add the key in it at immediate children level
+        add_key_to_element(element, key, value)  # Add the key in it at immediate children level
 
         for sub_element in element.items():  # Iterate for all the children of this element
             if isinstance(sub_element[1], dict):  # If this child is also a dictionary
-                add_key_value_recurssively(sub_element[1], key, value)  # call the same method recursively for this child
+                add_key_value_recurssively(sub_element[1], key,
+                                           value)  # call the same method recursively for this child
             elif isinstance(sub_element[1], list):  # If this child is an array
                 for sub_item in sub_element[1]:  # Iterate each element of this child array
                     add_key_value_recurssively(sub_item, key, value)  # call the same method recursively for this child
 
 
-print(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
+def main(input_json_file_path, output_json_file_path):
+    """
+    This method Adds three keys namely "pkg_id", "ingestSourceFileName" and "..TransactionId" to the given json file
 
-with open(input_file_path) as f:
-    json_data = json.load(f)
+    The "pkg_id" is added at each message object inside the TransactionMessage array,
+    example PolicyTransactionMessage[] and PolicyStatusMessage[] are two such array objects
 
-    pkg_id = get_next_pkg_id()
+    The "ingestSourceFileName" and "..TransactionId" is added to every element and sub-element of
+    each TransactionMessage object
 
-    for key, value in json_data.items():
-        if isinstance(value, list):  # Example: value= PolicyTransactionMessage:[]
-            message_key = list(value[0].keys())[0]  # Example: message_key="PolicyTransactionMessage"
+    It stores the modified json file at the given file path. It also make sure the size of output file is
+    reduced to minimum required size, to achive that it removes all the unnecessary characters from the json,
+    example white spaces between keys, tabs, new line characters, etc.
 
-            for message in value:  # Example: message=PolicyTransactionMessage:{}
-                message_value = message.get(message_key)
 
-                add_key_to_element(message_value, pkg_id_element_name, pkg_id)
-                pkg_id += 1
+    :param input_json_file_path: The file path of input json to modify by adding three keys
+    :param output_json_file_path: The file path of output json, where the modified json will be stored
+    :return: None
+    """
+    with open(input_json_file_path) as f:
+        json_data = json.load(f)
 
-                ingestSourceFileName = message_value.get('ingestSourceFileName')
-                transaction_element_key = get_transaction_element_key(message_value)
-                transaction_id_element = get_transaction_id_element(message_value[transaction_element_key])
-                transaction_id_element_key = transaction_id_element[0]
-                transaction_id = transaction_id_element[1]
+        # fetch the pkg_id to start with
+        pkg_id = get_next_pkg_id()
 
-                add_key_value_recurssively(message_value, transaction_id_element_key, transaction_id)
-                add_key_value_recurssively(message_value, 'ingestSourceFileName', ingestSourceFileName)
+        ingest_source_file_name_key = "ingestSourceFileName"
+        for key, value in json_data.items():
+            # As the name of TransactionMessage array is dynamic, so it tries to find it by checking its type
+            if isinstance(value, list):  # Example: value= PolicyTransactionMessage:[]
+                message_key = list(value[0].keys())[0]  # Example: message_key="PolicyTransactionMessage"
 
-    # print(json.dumps(json_data, indent=2, sort_keys=True))
+                # This is the actual loop which iterate through all the TransactionMessage one by one
+                for message in value:  # Example: message=PolicyTransactionMessage:{}
+                    message_value = message.get(message_key)
 
-    with open(output_file_path, 'w', encoding='utf-8') as f2:
-        json.dump(json_data, f2, ensure_ascii=False)
+                    # Add the pkg_id to the TransactionMessage (example: PolicyTransactionMessage)
+                    add_key_to_element(message_value, pkg_id_element_name, pkg_id)
+                    pkg_id += 1  # increment it by one for next message
 
-    persist_next_pkg_id(pkg_id)
-print(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3])
+                    # Find out the ingestSourceFileName for this message,
+                    # Note: It might be different for different messages
+                    ingest_source_file_name_value = message_value.get(ingest_source_file_name_key)
+
+                    # First Find out which is the Transaction Element,
+                    # example: PolicyStatusTransaction, PolicyTransaction are two such examples
+                    transaction_element_key = get_transaction_element_key(message_value)
+
+                    # Find out the the TransactionId Element,
+                    # example: ns0107_TransactionId, ns0478_TransactionID are two such examples
+                    transaction_id_element = get_transaction_id_element(message_value[transaction_element_key])
+                    transaction_id_element_key = transaction_id_element[0]
+                    transaction_id = transaction_id_element[1]
+
+                    # Add the "..TransactionId" recursively in each element and sub-element of the current message
+                    add_key_value_recurssively(message_value, transaction_id_element_key, transaction_id)
+
+                    # Add the "ingestSourceFileName" recursively in each element and sub-element of the current message
+                    add_key_value_recurssively(message_value, ingest_source_file_name_key, ingest_source_file_name_value)
+
+        # print(json.dumps(json_data, indent=2, sort_keys=True))
+
+        # Save the modified json at given output file path
+        with open(output_json_file_path, 'w', encoding='utf-8') as f2:
+            json.dump(json_data, f2, ensure_ascii=False)
+
+        # Store the next pkg_id on file system (__temp__.json) for next use
+        persist_next_pkg_id(pkg_id)
+
+
+started_on = datetime.utcnow()
+main(input_file_path, output_file_path)
+ended_on = datetime.utcnow()
+
+print(f"{'Start Time'.ljust(25)}: {started_on.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
+print(f'{"Input File Size (MB)".ljust(25)}: {"{:.2f}".format(os.stat(input_file_path).st_size / (1024 * 1024))}')
+print(f'{"Output File Size (MB)".ljust(25)}: {"{:.2f}".format(os.stat(output_file_path).st_size / (1024 * 1024))}')
+print(f"{'End Time'.ljust(25)}: {ended_on.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
